@@ -1,37 +1,17 @@
 import { appendFileSync } from 'node:fs';
 
-import { type Config, type ProviderConfig, parseModelRef } from './config';
+import { type Config, parseModelRef } from './config';
+import { anthropicError, type Provider } from './providers/types';
 
 export interface RouterOptions {
   config: Config;
-  // Resolved upstream keys, by provider name.
-  keys: Record<string, string>;
+  // One provider per configured upstream, by provider name.
+  providers: Record<string, Provider>;
   // Shared secret Claude Code must present. Keeps other local processes from
-  // spending the upstream keys through the open port.
+  // spending the upstream credentials through the open port.
   token: string;
-  fetchImpl?: typeof fetch;
   logFile?: string;
 }
-
-export function authHeaders(provider: ProviderConfig, key: string): Record<string, string> {
-  return provider.authHeader === 'x-api-key' ? { 'x-api-key': key } : { authorization: `Bearer ${key}` };
-}
-
-function anthropicError(status: number, type: string, message: string): Response {
-  return new Response(JSON.stringify({ type: 'error', error: { type, message } }), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-// Response headers Claude Code reads for retries, rate limits, and request ids.
-const PASS_RESPONSE_HEADERS = [
-  'content-type',
-  'request-id',
-  'x-request-id',
-  'retry-after',
-  'x-should-retry',
-];
 
 function presentedToken(req: Request): string | null {
   const auth = req.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
@@ -97,7 +77,6 @@ export function patchStreamUsage(stream: ReadableStream<Uint8Array>, estimate: n
 }
 
 export function createRouter(opts: RouterOptions) {
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const { config } = opts;
 
   const log = (line: string) => {
@@ -117,10 +96,9 @@ export function createRouter(opts: RouterOptions) {
   };
 
   const forward = async (req: Request, url: URL): Promise<Response> => {
-    const raw = await req.text();
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse(raw) as Record<string, unknown>;
+      body = JSON.parse(await req.text()) as Record<string, unknown>;
     } catch {
       return anthropicError(400, 'invalid_request_error', 'Request body is not valid JSON');
     }
@@ -137,67 +115,35 @@ export function createRouter(opts: RouterOptions) {
         `claude-any: "${requested}" has no provider prefix and no defaultModel is set. Configured providers: ${Object.keys(config.providers).join(', ') || 'none'}.`,
       );
     }
-    const provider = config.providers[ref.provider]!;
-    const key = opts.keys[ref.provider];
-    if (!key) return anthropicError(401, 'authentication_error', `claude-any: no key loaded for provider "${ref.provider}"`);
-
+    const provider = opts.providers[ref.provider];
+    if (!provider) return anthropicError(500, 'api_error', `claude-any: provider "${ref.provider}" is not loaded`);
     body.model = ref.model;
-    // `metadata.user_id` is Anthropic's abuse-tracking tag. Other upstreams
-    // either ignore it or reject the request (the ChatGPT backend behind the
-    // Kortix gateway: "Unsupported parameter: metadata").
-    if (!provider.forwardBetas) delete body.metadata;
-    const outgoing = JSON.stringify(body);
+    const sentBytes = JSON.stringify(body).length;
 
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      'anthropic-version': req.headers.get('anthropic-version') ?? '2023-06-01',
-      ...authHeaders(provider, key),
-    };
-    const beta = req.headers.get('anthropic-beta');
-    if (beta && provider.forwardBetas) headers['anthropic-beta'] = beta;
-    for (const [name, value] of req.headers) {
-      if (name.startsWith('x-claude-code-') || name === 'user-agent') headers[name] = value;
-    }
-
-    const search = provider.forwardBetas ? url.search : '';
-    const target = `${provider.baseUrl.replace(/\/+$/, '')}${url.pathname}${search}`;
     const started = Date.now();
-    let upstream: Response;
+    let res: Response;
     try {
-      upstream = await fetchImpl(target, { method: 'POST', headers, body: outgoing, signal: req.signal });
+      res = await provider.forward({ path: url.pathname, search: url.search, body, headers: req.headers, signal: req.signal });
     } catch (err) {
       if (req.signal.aborted) return new Response(null, { status: 499 });
-      log(`${requested} -> ${ref.provider}/${ref.model} network error ${(err as Error).message}`);
+      log(`${url.pathname} ${requested} -> ${ref.provider}/${ref.model} network error ${(err as Error).message}`);
       return anthropicError(502, 'api_error', `claude-any: ${ref.provider} unreachable: ${(err as Error).message}`);
     }
-    log(`${url.pathname} ${requested} -> ${ref.provider}/${ref.model} ${upstream.status} ${Date.now() - started}ms`);
+    log(`${url.pathname} ${requested} -> ${ref.provider}/${ref.model} ${res.status} ${Date.now() - started}ms`);
 
-    const responseHeaders = new Headers();
-    for (const name of PASS_RESPONSE_HEADERS) {
-      const value = upstream.headers.get(name);
-      if (value) responseHeaders.set(name, value);
+    if (!res.ok || config.estimateMissingUsage === false || url.pathname.endsWith('/count_tokens')) return res;
+    const estimate = estimateTokens(sentBytes);
+    const contentType = res.headers.get('content-type') ?? '';
+    if (res.body && contentType.includes('text/event-stream')) {
+      return new Response(patchStreamUsage(res.body, estimate), { status: res.status, headers: res.headers });
     }
-    for (const [name, value] of upstream.headers) {
-      if (name.startsWith('anthropic-ratelimit-')) responseHeaders.set(name, value);
-    }
-
-    const estimate = config.estimateMissingUsage === false || url.pathname.endsWith('/count_tokens')
-      ? null
-      : estimateTokens(outgoing.length);
-    const contentType = upstream.headers.get('content-type') ?? '';
-
-    if (upstream.ok && estimate !== null && upstream.body && contentType.includes('text/event-stream')) {
-      return new Response(patchStreamUsage(upstream.body, estimate), { status: upstream.status, headers: responseHeaders });
-    }
-    if (upstream.ok && estimate !== null && contentType.includes('application/json')) {
-      const json = (await upstream.json()) as Record<string, unknown>;
+    if (contentType.includes('application/json')) {
+      const json = (await res.json()) as Record<string, unknown>;
       const usage = json.usage as Record<string, unknown> | undefined;
       if (usage && !hasInputUsage(usage)) json.usage = { ...usage, input_tokens: estimate };
-      return new Response(JSON.stringify(json), { status: upstream.status, headers: responseHeaders });
+      return new Response(JSON.stringify(json), { status: res.status, headers: res.headers });
     }
-    // Errors pass through unchanged: Claude Code's retry and reactive
-    // compaction match on the upstream's own wording.
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+    return res;
   };
 
   return {

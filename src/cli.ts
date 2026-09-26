@@ -1,31 +1,44 @@
 #!/usr/bin/env bun
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, readSync } from 'node:fs';
+import { existsSync, readFileSync, readSync } from 'node:fs';
 
-import { type AuthHeader, type Config, allModelIds, configPath, loadConfig, parseModelRef, saveConfig } from './config';
-import { launch, resolveKeys } from './launch';
-import { fetchModels, formatCost, formatTokens, readModelCache } from './models';
-import { PRESETS } from './presets';
 import pkg from '../package.json';
+import {
+  type AuthHeader,
+  type Config,
+  type ProviderConfig,
+  allModelIds,
+  configPath,
+  loadConfig,
+  parseModelRef,
+  saveConfig,
+} from './config';
+import { launch } from './launch';
+import { formatCost, formatTokens, type ModelInfo, readModelCache, writeModelCache } from './models';
+import { createProvider, createProviders } from './providers';
+import { isNative } from './providers/anthropic';
+import { codexAuthPath } from './providers/codex/auth';
 import { startRouter } from './router';
-import { keychainAvailable, keychainDelete, keychainSet, resolveKey } from './secrets';
+import { keychainAvailable, keychainDelete, keychainSet } from './secrets';
 
-const HELP = `claude-any — Claude Code on any Anthropic-compatible model endpoint
+const HELP = `claude-any ${pkg.version} — Claude Code on any Anthropic Messages API endpoint
 
 Usage:
   claude-any [claude args…]            Start Claude Code through the router
-  claude-any add <name> [options]      Add a provider (presets: ${Object.keys(PRESETS).join(', ')})
-      --base-url <url>                 Anthropic-compatible base URL (router appends /v1/messages)
-      --auth bearer|x-api-key          How the upstream reads the key (default: bearer)
+  claude-any add <name> --base-url <url> [options]
+                                       Add an endpoint that serves the Anthropic Messages API
+                                       (the router calls <url>/v1/messages)
+      --auth bearer|x-api-key          How the endpoint reads the key (default: bearer)
       --key <key> | --key-env <VAR>    Key literal (stored in the macOS Keychain) or env var name
-      --forward-betas                  Forward Claude Code's anthropic-beta header
+      --native                         The endpoint is Anthropic's own API (default for api.anthropic.com)
+  claude-any add <name> --codex        Add GPT models on your ChatGPT plan, from \`codex login\`
   claude-any key <name>                Replace a provider's key (reads it from stdin or a hidden prompt)
   claude-any models <name> [search]    List the provider's models (* = in the /model picker)
   claude-any enable <provider/model>…  Add models to the /model picker
   claude-any disable <provider/model>… Remove models from the /model picker
   claude-any default <provider/model>  Model a new session starts on
-  claude-any small <provider/model>    Model for background requests (titles, summaries)
+  claude-any small <provider/model>    Model for background requests (titles, summaries, auto-mode classifier)
   claude-any list                      Show providers and picker models
   claude-any doctor                    Send one short request to every provider
   claude-any router [--port N]         Run only the router and print the env for a plain \`claude\`
@@ -52,9 +65,7 @@ function boolFlag(args: string[], name: string): boolean {
 }
 
 function readSecret(label: string): string {
-  if (!process.stdin.isTTY) {
-    return readFileSync(0, 'utf8').trim();
-  }
+  if (!process.stdin.isTTY) return readFileSync(0, 'utf8').trim();
   process.stderr.write(`${label}: `);
   spawnSync('stty', ['-echo'], { stdio: 'inherit' });
   try {
@@ -91,6 +102,26 @@ function requireModelIds(config: Config, ids: string[]): { provider: string; mod
   });
 }
 
+function requireProvider(config: Config, name: string | undefined): ProviderConfig {
+  const provider = name ? config.providers[name] : undefined;
+  if (!name || !provider) {
+    throw new Error(`Unknown provider "${name ?? ''}". Configured: ${Object.keys(config.providers).join(', ') || 'none'}`);
+  }
+  return provider;
+}
+
+async function refreshModels(name: string, provider: ProviderConfig): Promise<ModelInfo[]> {
+  const models = await createProvider(name, provider).listModels();
+  writeModelCache(name, models);
+  return models;
+}
+
+function describeProvider(name: string, p: ProviderConfig): string {
+  if (p.type === 'codex') return `${name}  ChatGPT plan via codex login (${codexAuthPath()})`;
+  const key = p.apiKey === 'keychain' ? 'Keychain' : p.apiKey.startsWith('env:') ? `$${p.apiKey.slice(4)}` : 'config file';
+  return `${name}  ${p.baseUrl}  (key: ${key}, auth: ${p.authHeader ?? 'bearer'}${isNative(p) ? ', Anthropic-native' : ''})`;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const config = loadConfig();
@@ -109,38 +140,50 @@ async function main(argv: string[]): Promise<number> {
 
     case 'add': {
       const name = rest.shift();
-      if (!name || name.startsWith('-')) throw new Error('Usage: claude-any add <name> [--base-url URL] [--key KEY]');
-      const preset = PRESETS[name];
-      const baseUrl = flag(rest, '--base-url') ?? preset?.baseUrl;
-      if (!baseUrl) throw new Error(`"${name}" is not a preset; pass --base-url`);
-      const auth = (flag(rest, '--auth') ?? preset?.authHeader ?? 'bearer') as AuthHeader;
-      if (auth !== 'bearer' && auth !== 'x-api-key') throw new Error('--auth must be bearer or x-api-key');
-      const keyEnv = flag(rest, '--key-env');
-      let key = flag(rest, '--key');
-      const forwardBetas = boolFlag(rest, '--forward-betas') || preset?.forwardBetas || false;
-      if (!keyEnv && !key) {
-        if (preset) process.stderr.write(`Key: ${preset.keyHint}\n`);
-        key = readSecret(`API key for ${name}`);
+      if (!name || name.startsWith('-') || name.includes('/')) {
+        throw new Error('Usage: claude-any add <name> --base-url <url> [--key KEY] | claude-any add <name> --codex');
       }
-      const apiKey = keyEnv ? `env:${keyEnv}` : storeKey(name, key!);
       const existing = config.providers[name];
-      config.providers[name] = { baseUrl, apiKey, authHeader: auth, forwardBetas, models: existing?.models ?? [], labels: existing?.labels };
+      let provider: ProviderConfig;
+      if (boolFlag(rest, '--codex')) {
+        if (!existsSync(codexAuthPath())) throw new Error(`No ChatGPT login at ${codexAuthPath()}. Run: codex login`);
+        provider = { type: 'codex', models: existing?.models ?? [], labels: existing?.labels };
+      } else {
+        const baseUrl = flag(rest, '--base-url');
+        if (!baseUrl) {
+          throw new Error('--base-url is required: the root of an endpoint that serves the Anthropic Messages API (the router calls <url>/v1/messages). For ChatGPT models use --codex.');
+        }
+        try {
+          new URL(baseUrl);
+        } catch {
+          throw new Error(`--base-url "${baseUrl}" is not a URL`);
+        }
+        const auth = (flag(rest, '--auth') ?? 'bearer') as AuthHeader;
+        if (auth !== 'bearer' && auth !== 'x-api-key') throw new Error('--auth must be bearer or x-api-key');
+        const keyEnv = flag(rest, '--key-env');
+        let key = flag(rest, '--key');
+        if (!keyEnv && !key) key = readSecret(`API key for ${name}`);
+        const apiKey = keyEnv ? `env:${keyEnv}` : storeKey(name, key!);
+        provider = { baseUrl, apiKey, authHeader: auth, models: existing?.models ?? [], labels: existing?.labels };
+        if (boolFlag(rest, '--native')) provider.native = true;
+      }
+      config.providers[name] = provider;
       saveConfig(config);
-      console.log(`Added ${name} → ${baseUrl}`);
+      console.log(`Added ${describeProvider(name, provider)}`);
       try {
-        const models = await fetchModels(name, config.providers[name]!, resolveKey(name, apiKey));
+        const models = await refreshModels(name, provider);
         console.log(`${models.length} models available. Next: claude-any models ${name}   then   claude-any enable ${name}/<model>`);
       } catch (err) {
-        console.log(`Model list unavailable (${(err as Error).message.slice(0, 120)}). Enable models by id: claude-any enable ${name}/<model>`);
+        console.log(`Model list unavailable (${(err as Error).message.slice(0, 160)}). Enable models by id: claude-any enable ${name}/<model>`);
       }
       return 0;
     }
 
     case 'key': {
       const name = rest[0];
-      const provider = name ? config.providers[name] : undefined;
-      if (!name || !provider) throw new Error(`Unknown provider "${name ?? ''}"`);
-      provider.apiKey = storeKey(name, readSecret(`API key for ${name}`));
+      const provider = requireProvider(config, name);
+      if (provider.type === 'codex') throw new Error(`"${name}" uses your ChatGPT login. Run: codex login`);
+      provider.apiKey = storeKey(name!, readSecret(`API key for ${name}`));
       saveConfig(config);
       console.log(`Updated the key for ${name}`);
       return 0;
@@ -148,9 +191,9 @@ async function main(argv: string[]): Promise<number> {
 
     case 'remove': {
       const name = rest[0];
-      if (!name || !config.providers[name]) throw new Error(`Unknown provider "${name ?? ''}"`);
-      if (config.providers[name]!.apiKey === 'keychain') keychainDelete(name);
-      delete config.providers[name];
+      const provider = requireProvider(config, name);
+      if (provider.type !== 'codex' && provider.apiKey === 'keychain') keychainDelete(name!);
+      delete config.providers[name!];
       for (const k of ['defaultModel', 'smallModel'] as const) {
         if (config[k]?.startsWith(`${name}/`)) delete config[k];
       }
@@ -161,11 +204,10 @@ async function main(argv: string[]): Promise<number> {
 
     case 'models': {
       const [name, search] = rest;
-      const provider = name ? config.providers[name] : undefined;
-      if (!name || !provider) throw new Error(`Unknown provider "${name ?? ''}". Configured: ${Object.keys(config.providers).join(', ') || 'none'}`);
-      let models = readModelCache(name);
+      const provider = requireProvider(config, name);
+      let models = readModelCache(name!);
       try {
-        models = await fetchModels(name, provider, resolveKey(name, provider.apiKey));
+        models = await refreshModels(name!, provider);
       } catch (err) {
         if (!models.length) throw err;
         process.stderr.write(`warning: showing cached list (${(err as Error).message.slice(0, 120)})\n`);
@@ -209,8 +251,7 @@ async function main(argv: string[]): Promise<number> {
 
     case 'list': {
       for (const [name, p] of Object.entries(config.providers)) {
-        const key = p.apiKey === 'keychain' ? 'Keychain' : p.apiKey.startsWith('env:') ? `$${p.apiKey.slice(4)}` : 'config file';
-        console.log(`${name}  ${p.baseUrl}  (key: ${key}, auth: ${p.authHeader ?? 'bearer'})`);
+        console.log(describeProvider(name, p));
         for (const m of p.models) console.log(`    ${name}/${m}`);
       }
       console.log(`default: ${config.defaultModel ?? '-'}   small: ${config.smallModel ?? config.defaultModel ?? '-'}`);
@@ -226,15 +267,14 @@ async function main(argv: string[]): Promise<number> {
           continue;
         }
         const token = `ca_${randomBytes(12).toString('hex')}`;
-        let key: string;
+        let router: ReturnType<typeof startRouter>;
         try {
-          key = resolveKey(name, p.apiKey);
+          router = startRouter({ config, providers: { [name]: createProvider(name, p) }, token });
         } catch (err) {
           console.log(`✗ ${name}: ${(err as Error).message}`);
           failures++;
           continue;
         }
-        const router = startRouter({ config, keys: { [name]: key }, token });
         const started = Date.now();
         const res = await fetch(`${router.url}/v1/messages`, {
           method: 'POST',
@@ -253,7 +293,7 @@ async function main(argv: string[]): Promise<number> {
     case 'router': {
       const port = Number(flag(rest, '--port') ?? 0);
       const token = `ca_${randomBytes(24).toString('hex')}`;
-      const router = startRouter({ config, keys: resolveKeys(config), token, port });
+      const router = startRouter({ config, providers: createProviders(config), token, port });
       console.log(`export ANTHROPIC_BASE_URL=${router.url}\nexport ANTHROPIC_AUTH_TOKEN=${token}\n# models: ${allModelIds(config).join(' ')}`);
       await new Promise(() => {});
       return 0;

@@ -2,24 +2,41 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-// How the upstream expects the key. Anthropic itself reads `x-api-key`; most
-// Anthropic-compatible gateways read `Authorization: Bearer`.
+// How an Anthropic-compatible upstream expects the key. Anthropic itself reads
+// `x-api-key`; most compatible gateways read `Authorization: Bearer`.
 export type AuthHeader = 'bearer' | 'x-api-key';
 
-export interface ProviderConfig {
-  baseUrl: string;
-  // `keychain` (macOS Keychain, service "claude-any", account = provider
-  // name), `env:NAME`, or a literal key.
-  apiKey: string;
-  authHeader?: AuthHeader;
-  // Forward Claude Code's `anthropic-beta` header. On for Anthropic itself;
-  // off elsewhere because some compatible endpoints reject unknown betas.
-  forwardBetas?: boolean;
+interface ProviderBase {
   // Model ids as the upstream names them, without the provider prefix.
   models: string[];
   // Optional picker labels, keyed by upstream model id.
   labels?: Record<string, string>;
 }
+
+// Any endpoint that serves the Anthropic Messages API (`POST {baseUrl}/v1/messages`).
+export interface AnthropicProviderConfig extends ProviderBase {
+  type?: 'anthropic';
+  baseUrl: string;
+  // `keychain` (macOS Keychain, service "claude-any", account = provider
+  // name), `env:NAME`, or a literal key.
+  apiKey: string;
+  authHeader?: AuthHeader;
+  // The endpoint is Anthropic's own API: forward Claude Code's betas and
+  // `metadata`, and keep auto mode's server-side checks. Default: true only
+  // for api.anthropic.com.
+  native?: boolean;
+  // Older name for `native`.
+  forwardBetas?: boolean;
+}
+
+// GPT models on the ChatGPT plan behind `codex login`, translated locally.
+export interface CodexProviderConfig extends ProviderBase {
+  type: 'codex';
+  // Default: https://chatgpt.com/backend-api/codex
+  baseUrl?: string;
+}
+
+export type ProviderConfig = AnthropicProviderConfig | CodexProviderConfig;
 
 export interface Config {
   providers: Record<string, ProviderConfig>;

@@ -1,14 +1,16 @@
 {
   "name": "claude-any",
-  "version": "0.1.1",
-  "description": "Run Claude Code on any Anthropic-compatible model endpoint, and switch between all of them from /model.",
+  "version": "0.2.0",
+  "description": "Run Claude Code on any Anthropic Messages API endpoint or on GPT models from your ChatGPT plan, and switch between all of them from /model.",
   "keywords": [
     "claude-code",
     "anthropic",
+    "anthropic-messages-api",
     "llm-gateway",
     "router",
+    "codex",
+    "chatgpt",
     "cli",
-    "kortix",
     "model-picker"
   ],
   "homepage": "https://github.com/markokraemer/claude-any#readme",

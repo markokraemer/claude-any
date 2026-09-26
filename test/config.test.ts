@@ -10,19 +10,19 @@ import { buildSettings, contextWindow, pickerOptions } from '../src/picker';
 
 const config: Config = {
   providers: {
-    kortix: { baseUrl: 'https://gw.test', apiKey: 'keychain', models: ['kimi-k3', 'glm-5.3-flash'], labels: { 'glm-5.3-flash': 'GLM Flash' } },
+    gw: { baseUrl: 'https://gw.test', apiKey: 'keychain', models: ['kimi-k3', 'glm-5.3-flash'], labels: { 'glm-5.3-flash': 'GLM Flash' } },
     zai: { baseUrl: 'https://z.test', apiKey: 'env:ZAI', models: ['glm-5'] },
   },
-  defaultModel: 'kortix/kimi-k3',
-  smallModel: 'kortix/glm-5.3-flash',
+  defaultModel: 'gw/kimi-k3',
+  smallModel: 'gw/glm-5.3-flash',
 };
 
 describe('parseModelRef', () => {
   test('splits on the first slash when the prefix is a configured provider', () => {
-    expect(parseModelRef(config, 'kortix/deepinfra/tencent/Hy3')).toEqual({ provider: 'kortix', model: 'deepinfra/tencent/Hy3' });
+    expect(parseModelRef(config, 'gw/deepinfra/tencent/Hy3')).toEqual({ provider: 'gw', model: 'deepinfra/tencent/Hy3' });
     expect(parseModelRef(config, 'openai/gpt-5')).toBeNull();
     expect(parseModelRef(config, 'claude-sonnet-5')).toBeNull();
-    expect(parseModelRef(config, 'kortix/kimi-k3[1m]')).toEqual({ provider: 'kortix', model: 'kimi-k3' });
+    expect(parseModelRef(config, 'gw/kimi-k3[1m]')).toEqual({ provider: 'gw', model: 'kimi-k3' });
   });
 });
 
@@ -41,14 +41,7 @@ describe('normalizeModelList', () => {
     expect(m!.outputCost).toBeCloseTo(14);
   });
 
-  test('marks Kortix ChatGPT models as billed to the plan, without API prices', () => {
-    const [m] = normalizeModelList({ models: { 'codex/gpt-6-sol': { name: 'GPT-6 Sol (ChatGPT)', provider: 'codex', limit: { context: 1050000 }, cost: { input: 2, output: 10 } } } });
-    expect(m).toEqual({ id: 'codex/gpt-6-sol', name: 'GPT-6 Sol (ChatGPT)', contextTokens: 1050000, subscription: 'ChatGPT plan' });
-    expect(pickerOptions({ providers: { kortix: { baseUrl: 'x', apiKey: 'k', models: ['codex/gpt-6-sol'] } } }, { kortix: [m!] })[0]!.description)
-      .toBe('kortix · 1.1M context · billed to ChatGPT plan');
-  });
-
-  test('reads the Kortix gateway models map', () => {
+  test('reads a models.dev-style map', () => {
     expect(normalizeModelList({ models: { 'kimi-k3': { name: 'Kimi K3 2.8T', limit: { context: 1048576 }, cost: { input: 2.5, output: 14 } } } })).toEqual([
       { id: 'kimi-k3', name: 'Kimi K3 2.8T', contextTokens: 1048576, inputCost: 2.5, outputCost: 14 },
     ]);
@@ -56,12 +49,12 @@ describe('normalizeModelList', () => {
 });
 
 describe('picker', () => {
-  const cache = { kortix: [{ id: 'kimi-k3', name: 'Kimi K3 2.8T', contextTokens: 1048576, inputCost: 2.5, outputCost: 14 }], zai: [{ id: 'glm-5', contextTokens: 200000 }] };
+  const cache = { gw: [{ id: 'kimi-k3', name: 'Kimi K3 2.8T', contextTokens: 1048576, inputCost: 2.5, outputCost: 14 }], zai: [{ id: 'glm-5', contextTokens: 200000 }] };
 
   test('builds one labeled row per model, replacing the built-in lineup', () => {
     expect(pickerOptions(config, cache)).toEqual([
-      { model: 'kortix/kimi-k3', label: 'Kimi K3 2.8T', description: 'kortix · 1M context · $2.5/$14 per MTok' },
-      { model: 'kortix/glm-5.3-flash', label: 'GLM Flash', description: 'kortix' },
+      { model: 'gw/kimi-k3', label: 'Kimi K3 2.8T', description: 'gw · 1M context · $2.5/$14 per MTok' },
+      { model: 'gw/glm-5.3-flash', label: 'GLM Flash', description: 'gw' },
       { model: 'zai/glm-5', label: 'glm-5', description: 'zai · 200K context' },
     ]);
     expect((buildSettings(config, cache).modelPicker as { replaceBuiltInOptions: boolean }).replaceBuiltInOptions).toBe(true);
@@ -85,9 +78,9 @@ describe('claudeEnv', () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('ca_tok');
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_MODEL).toBeUndefined();
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('kortix/kimi-k3');
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('kortix/kimi-k3');
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('kortix/glm-5.3-flash');
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gw/kimi-k3');
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gw/kimi-k3');
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('gw/glm-5.3-flash');
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBe('0');
   });
@@ -123,14 +116,14 @@ describe('restoreUserModel', () => {
   const settingsFile = () => join(dir, 'settings.json');
 
   test('puts back the model a plain claude used and returns the routed pick', () => {
-    writeFileSync(settingsFile(), JSON.stringify({ model: 'kortix/glm-5.3-flash', theme: 'dark' }));
-    expect(restoreUserModel(config, 'opus')).toBe('kortix/glm-5.3-flash');
+    writeFileSync(settingsFile(), JSON.stringify({ model: 'gw/glm-5.3-flash', theme: 'dark' }));
+    expect(restoreUserModel(config, 'opus')).toBe('gw/glm-5.3-flash');
     expect(JSON.parse(readFileSync(settingsFile(), 'utf8'))).toEqual({ model: 'opus', theme: 'dark' });
   });
 
   test('removes the key when there was none before', () => {
-    writeFileSync(settingsFile(), JSON.stringify({ model: 'kortix/kimi-k3' }));
-    expect(restoreUserModel(config, undefined)).toBe('kortix/kimi-k3');
+    writeFileSync(settingsFile(), JSON.stringify({ model: 'gw/kimi-k3' }));
+    expect(restoreUserModel(config, undefined)).toBe('gw/kimi-k3');
     expect(JSON.parse(readFileSync(settingsFile(), 'utf8'))).toEqual({});
   });
 

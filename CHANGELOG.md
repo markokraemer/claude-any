@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 — 2026-09-26
+
+- **Local Codex provider.** `claude-any add <name> --codex` serves GPT models
+  from the ChatGPT plan behind `codex login`, straight from
+  `chatgpt.com/backend-api/codex`, with no gateway. The router translates
+  Anthropic Messages ⇄ OpenAI Responses: tools, tool results, images
+  (including images a tool returns), reasoning effort, reasoning replay through
+  thinking-block signatures, usage with cached tokens, stop reasons, errors
+  (context overflow keeps Claude Code's compaction wording), and non-streaming
+  requests. Tokens refresh and are written back in the Codex CLI's format.
+- **Provider-neutral.** Presets and every gateway-specific rule are gone. A
+  provider is either any Anthropic Messages API endpoint (`--base-url`) or the
+  local Codex provider (`--codex`). `--native` marks Anthropic's own API
+  (automatic for api.anthropic.com); `forwardBetas` in older configs still
+  works.
+- Providers behind one interface (`src/providers/`); the router only
+  authenticates, routes, estimates missing usage, and logs.
+
 ## 0.1.1 — 2026-09-26
 
 - Drop Anthropic `metadata` for non-Anthropic providers. The ChatGPT backend

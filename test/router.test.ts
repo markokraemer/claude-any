@@ -1,17 +1,29 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { Config } from '../src/config';
+import type { AnthropicProviderConfig } from '../src/config';
+import { createAnthropicProvider } from '../src/providers/anthropic';
 import { createRouter, estimateTokens, patchStreamUsage } from '../src/router';
 
 const config: Config = {
   providers: {
-    kortix: { baseUrl: 'https://gw.test/', apiKey: 'keychain', authHeader: 'bearer', models: ['kimi-k3', 'deepinfra/tencent/Hy3'] },
+    gw: { baseUrl: 'https://gw.test/', apiKey: 'keychain', authHeader: 'bearer', models: ['kimi-k3', 'deepinfra/tencent/Hy3'] },
     anthropic: { baseUrl: 'https://api.anthropic.test', apiKey: 'keychain', authHeader: 'x-api-key', forwardBetas: true, models: ['claude-sonnet-5'] },
   },
-  defaultModel: 'kortix/kimi-k3',
+  defaultModel: 'gw/kimi-k3',
 };
-const keys = { kortix: 'kgw_secret', anthropic: 'sk-ant-secret' };
+const keys = { gw: 'kgw_secret', anthropic: 'sk-ant-secret' };
 const TOKEN = 'ca_router_token';
+
+function makeRouter(cfg: Config, fetchImpl?: typeof fetch) {
+  const providers = Object.fromEntries(
+    Object.entries(cfg.providers).map(([name, p]) => [
+      name,
+      createAnthropicProvider(p as AnthropicProviderConfig, keys[name as keyof typeof keys], fetchImpl),
+    ]),
+  );
+  return createRouter({ config: cfg, providers, token: TOKEN });
+}
 
 interface Call {
   url: string;
@@ -60,21 +72,21 @@ const okJson = () => Response.json({ type: 'message', content: [{ type: 'text', 
 describe('router auth', () => {
   test('rejects a request without the router token', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] }, { authorization: 'Bearer wrong' });
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] }, { authorization: 'Bearer wrong' });
     expect(res.status).toBe(401);
     expect(calls).toHaveLength(0);
   });
 
   test('accepts the router token as x-api-key', async () => {
     const { fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] }, { authorization: '', 'x-api-key': TOKEN });
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] }, { authorization: '', 'x-api-key': TOKEN });
     expect(res.status).toBe(200);
   });
 
   test('answers the HEAD connectivity probe without a token', async () => {
-    const router = createRouter({ config, keys, token: TOKEN });
+    const router = makeRouter(config);
     const res = await router.fetch(new Request('http://127.0.0.1/api/hello', { method: 'HEAD' }));
     expect(res.status).toBe(200);
   });
@@ -83,8 +95,8 @@ describe('router auth', () => {
 describe('router routing', () => {
   test('strips the provider prefix and sends the provider key as a bearer token', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    await post(router, { model: 'kortix/deepinfra/tencent/Hy3', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] });
+    const router = makeRouter(config, fetchImpl);
+    await post(router, { model: 'gw/deepinfra/tencent/Hy3', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] });
     expect(calls[0]!.url).toBe('https://gw.test/v1/messages');
     expect(calls[0]!.body.model).toBe('deepinfra/tencent/Hy3');
     expect(calls[0]!.body.max_tokens).toBe(5);
@@ -98,9 +110,9 @@ describe('router routing', () => {
 
   test('drops Anthropic metadata for a non-Anthropic provider and keeps it for Anthropic', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
+    const router = makeRouter(config, fetchImpl);
     const metadata = { user_id: '{"session_id":"s1"}' };
-    await post(router, { model: 'kortix/kimi-k3', metadata, messages: [] });
+    await post(router, { model: 'gw/kimi-k3', metadata, messages: [] });
     await post(router, { model: 'anthropic/claude-sonnet-5', metadata, messages: [] });
     expect(calls[0]!.body).not.toHaveProperty('metadata');
     expect(calls[1]!.body.metadata).toEqual(metadata);
@@ -108,7 +120,7 @@ describe('router routing', () => {
 
   test('uses x-api-key and forwards betas and the query for a provider configured that way', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
+    const router = makeRouter(config, fetchImpl);
     await post(router, { model: 'anthropic/claude-sonnet-5', messages: [] });
     expect(calls[0]!.url).toBe('https://api.anthropic.test/v1/messages?beta=true');
     expect(calls[0]!.headers['x-api-key']).toBe('sk-ant-secret');
@@ -118,7 +130,7 @@ describe('router routing', () => {
 
   test('sends an id without a provider prefix (a Claude Code background request) to the default model', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
+    const router = makeRouter(config, fetchImpl);
     await post(router, { model: 'claude-haiku-4-5-20251001', messages: [] });
     expect(calls[0]!.url).toBe('https://gw.test/v1/messages');
     expect(calls[0]!.body.model).toBe('kimi-k3');
@@ -126,8 +138,8 @@ describe('router routing', () => {
 
   test('routes count_tokens to the same provider', async () => {
     const { calls, fetchImpl } = fakeUpstream(() => Response.json({ input_tokens: 42 }));
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] }, {}, '/v1/messages/count_tokens');
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] }, {}, '/v1/messages/count_tokens');
     expect(calls[0]!.url).toBe('https://gw.test/v1/messages/count_tokens');
     expect(await res.json()).toEqual({ input_tokens: 42 });
   });
@@ -135,8 +147,8 @@ describe('router routing', () => {
   test('returns upstream errors unchanged so Claude Code can match their wording', async () => {
     const body = { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 250000 tokens > 200000 maximum' } };
     const { fetchImpl } = fakeUpstream(() => Response.json(body, { status: 400, headers: { 'request-id': 'req_9' } }));
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] });
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] });
     expect(res.status).toBe(400);
     expect(res.headers.get('request-id')).toBe('req_9');
     expect(await res.json()).toEqual(body);
@@ -146,17 +158,17 @@ describe('router routing', () => {
     const fetchImpl = (async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] });
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] });
     expect(res.status).toBe(502);
     expect(((await res.json()) as { error: { type: string } }).error.type).toBe('api_error');
   });
 
   test('lists every configured model in the Anthropic /v1/models shape', async () => {
-    const router = createRouter({ config, keys, token: TOKEN });
+    const router = makeRouter(config);
     const res = await router.fetch(new Request('http://127.0.0.1/v1/models', { headers: { authorization: `Bearer ${TOKEN}` } }));
     const body = (await res.json()) as { data: { id: string }[] };
-    expect(body.data.map((m) => m.id)).toEqual(['kortix/kimi-k3', 'kortix/deepinfra/tencent/Hy3', 'anthropic/claude-sonnet-5']);
+    expect(body.data.map((m) => m.id)).toEqual(['gw/kimi-k3', 'gw/deepinfra/tencent/Hy3', 'anthropic/claude-sonnet-5']);
   });
 });
 
@@ -172,8 +184,8 @@ describe('usage estimate', () => {
         ['message_stop', { type: 'message_stop' }],
       ),
     );
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const request = { model: 'kortix/kimi-k3', stream: true, messages: [{ role: 'user', content: 'x'.repeat(4000) }] };
+    const router = makeRouter(config, fetchImpl);
+    const request = { model: 'gw/kimi-k3', stream: true, messages: [{ role: 'user', content: 'x'.repeat(4000) }] };
     const res = await post(router, request);
     const text = await res.text();
     const delta = text.split('\n\n').find((e) => e.includes('"message_delta"'))!;
@@ -209,15 +221,15 @@ describe('usage estimate', () => {
 
   test('fills input_tokens in a non-streaming response that reported zero', async () => {
     const { fetchImpl } = fakeUpstream(() => Response.json({ type: 'message', content: [], usage: { input_tokens: 0, output_tokens: 2 } }));
-    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] });
+    const router = makeRouter(config, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] });
     expect(((await res.json()) as { usage: { input_tokens: number } }).usage.input_tokens).toBeGreaterThan(0);
   });
 
   test('is off when estimateMissingUsage is false', async () => {
     const { fetchImpl } = fakeUpstream(() => Response.json({ type: 'message', content: [], usage: { input_tokens: 0, output_tokens: 2 } }));
-    const router = createRouter({ config: { ...config, estimateMissingUsage: false }, keys, token: TOKEN, fetchImpl });
-    const res = await post(router, { model: 'kortix/kimi-k3', messages: [] });
+    const router = makeRouter({ ...config, estimateMissingUsage: false }, fetchImpl);
+    const res = await post(router, { model: 'gw/kimi-k3', messages: [] });
     expect(((await res.json()) as { usage: { input_tokens: number } }).usage.input_tokens).toBe(0);
   });
 });

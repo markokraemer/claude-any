@@ -6,14 +6,9 @@ import { join } from 'node:path';
 
 import { type Config, allModelIds, configDir, loadState, parseModelRef, saveState } from './config';
 import { buildSettings, contextWindow, loadCaches } from './picker';
+import { createProviders } from './providers';
+import { isNative } from './providers/anthropic';
 import { startRouter } from './router';
-import { resolveKey } from './secrets';
-
-export function resolveKeys(config: Config): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(config.providers).map(([name, provider]) => [name, resolveKey(name, provider.apiKey)]),
-  );
-}
 
 // Claude Code writes a /model choice into the user settings file. Routed ids
 // mean nothing to a plain `claude`, so the launcher restores that key after
@@ -76,7 +71,8 @@ export function claudeEnv(config: Config, routerUrl: string, token: string, wind
   // upstream can never run them, so Claude Code would fall back mid-session
   // behind a notice. Ask for its own classifier from the start instead; the
   // classifier requests then go through the router like any other request.
-  if (!Object.values(config.providers).every((p) => p.forwardBetas) && env.CLAUDE_CODE_AUTO_MODE_SERVER === undefined) {
+  const allNative = Object.values(config.providers).every((p) => p.type !== 'codex' && isNative(p));
+  if (!allNative && env.CLAUDE_CODE_AUTO_MODE_SERVER === undefined) {
     env.CLAUDE_CODE_AUTO_MODE_SERVER = '0';
   }
   if (window) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window);
@@ -87,11 +83,11 @@ export async function launch(config: Config, args: string[], claudeBin = process
   if (!allModelIds(config).length) {
     throw new Error('No models configured. Run `claude-any add kortix` then `claude-any enable kortix/<model>`.');
   }
-  const keys = resolveKeys(config);
+  const providers = createProviders(config);
   const token = `ca_${randomBytes(24).toString('hex')}`;
   const router = startRouter({
     config,
-    keys,
+    providers,
     token,
     logFile: process.env.CLAUDE_ANY_LOG || join(configDir(), 'router.log'),
   });

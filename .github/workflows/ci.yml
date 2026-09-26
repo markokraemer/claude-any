@@ -24,3 +24,9 @@ jobs:
           ./bin/claude-any add local --base-url http://127.0.0.1:9 --key-env NONE_SET
           ./bin/claude-any enable local/some-model
           ./bin/claude-any list
+          # --base-url is required for an Anthropic Messages endpoint
+          if ./bin/claude-any add nourl 2>err.txt; then exit 1; fi
+          grep -q "base-url is required" err.txt
+          # --codex without a ChatGPT login names the fix
+          if CODEX_HOME="$RUNNER_TEMP/nocodex" ./bin/claude-any add gpt --codex 2>err.txt; then exit 1; fi
+          grep -q "codex login" err.txt

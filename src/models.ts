@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { configDir, type ProviderConfig } from './config';
-import { authHeaders } from './router';
+import { configDir } from './config';
 
 export interface ModelInfo {
   id: string;
@@ -11,8 +10,7 @@ export interface ModelInfo {
   // USD per million tokens.
   inputCost?: number;
   outputCost?: number;
-  // Set when the upstream says the model runs on a subscription rather than
-  // per-token pricing (Kortix gateway: `provider: "codex"` = ChatGPT plan).
+  // Set when the model runs on a subscription instead of per-token pricing.
   subscription?: string;
 }
 
@@ -21,11 +19,11 @@ const num = (value: unknown): number | undefined => {
   return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
 };
 
-// Three list shapes exist in the wild:
+// Model list shapes that Anthropic-compatible endpoints return:
 //  - Anthropic / OpenAI: `{ data: [{ id, display_name | name, ... }] }`
-//  - OpenRouter: the same `data` array with `context_length` and per-token
-//    `pricing.prompt` / `pricing.completion` strings
-//  - Kortix gateway (models.dev style): `{ models: { <id>: { name, limit, cost } } }`
+//  - OpenRouter-style: the same `data` array with `context_length` and
+//    per-token `pricing.prompt` / `pricing.completion` strings
+//  - models.dev-style maps: `{ models: { <id>: { name, limit, cost } } }`
 export function normalizeModelList(body: unknown): ModelInfo[] {
   if (!body || typeof body !== 'object') return [];
   const root = body as Record<string, unknown>;
@@ -54,12 +52,12 @@ export function normalizeModelList(body: unknown): ModelInfo[] {
     return Object.entries(root.models as Record<string, Record<string, unknown>>).map(([id, m]) => {
       const limit = (m?.limit as Record<string, unknown> | undefined) ?? {};
       const cost = (m?.cost as Record<string, unknown> | undefined) ?? {};
-      const subscription = m?.provider === 'codex' ? 'ChatGPT plan' : undefined;
       return {
         id,
         name: typeof m?.name === 'string' ? m.name : undefined,
         contextTokens: num(limit.context),
-        ...(subscription ? { subscription } : { inputCost: num(cost.input), outputCost: num(cost.output) }),
+        inputCost: num(cost.input),
+        outputCost: num(cost.output),
       };
     });
   }
@@ -79,22 +77,9 @@ export function readModelCache(provider: string): ModelInfo[] {
   }
 }
 
-export async function fetchModels(
-  name: string,
-  provider: ProviderConfig,
-  key: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ModelInfo[]> {
-  const url = `${provider.baseUrl.replace(/\/+$/, '')}/v1/models?limit=1000`;
-  const res = await fetchImpl(url, {
-    headers: { ...authHeaders(provider, key), 'anthropic-version': '2023-06-01' },
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) throw new Error(`GET ${url} returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const models = normalizeModelList(await res.json());
+export function writeModelCache(provider: string, models: ModelInfo[]): void {
   mkdirSync(join(configDir(), 'cache'), { recursive: true });
-  writeFileSync(cachePath(name), JSON.stringify({ fetchedAt: new Date().toISOString(), models }));
-  return models;
+  writeFileSync(cachePath(provider), JSON.stringify({ fetchedAt: new Date().toISOString(), models }));
 }
 
 export function formatTokens(n: number | undefined): string {
