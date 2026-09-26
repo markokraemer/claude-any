@@ -100,7 +100,7 @@ export interface ModelRef {
   model: string;
 }
 
-// `kortix/deepinfra/tencent/Hy3` -> provider `kortix`, model
+// `gw/deepinfra/tencent/Hy3` -> provider `gw`, model
 // `deepinfra/tencent/Hy3`. Only a configured provider name counts as a prefix.
 export function parseModelRef(config: Config, rawId: string): ModelRef | null {
   // Claude Code may append a context tag such as `[1m]`; upstreams never

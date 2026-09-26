@@ -81,7 +81,7 @@ export function claudeEnv(config: Config, routerUrl: string, token: string, wind
 
 export async function launch(config: Config, args: string[], claudeBin = process.env.CLAUDE_ANY_CLAUDE_BIN || 'claude'): Promise<number> {
   if (!allModelIds(config).length) {
-    throw new Error('No models configured. Run `claude-any add kortix` then `claude-any enable kortix/<model>`.');
+    throw new Error('No models configured. Run `claude-any add <name> --base-url <url>` or `claude-any add chatgpt --codex`, then `claude-any enable <name>/<model>`.');
   }
   const providers = createProviders(config);
   const token = `ca_${randomBytes(24).toString('hex')}`;

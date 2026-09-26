@@ -20,7 +20,7 @@ export function loadCaches(config: Config): Record<string, ModelInfo[]> {
 
 // One /model row per configured model, in config order:
 //   Kimi K3 2.8T
-//   kortix · 1M context · $2.5/$14 per MTok
+//   gw · 1M context · $2.5/$14 per MTok
 export function pickerOptions(config: Config, cache: Record<string, ModelInfo[]>): PickerOption[] {
   return allModelIds(config).map((id) => {
     const slash = id.indexOf('/');
