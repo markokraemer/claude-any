@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs the TypeScript entry with Bun; resolves symlinks so it works from ~/.local/bin.
+set -euo pipefail
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+root="$(cd -P "$(dirname "$src")/.." && pwd)"
+bun_bin="$(command -v bun || echo "$HOME/.bun/bin/bun")"
+exec "$bun_bin" "$root/src/cli.ts" "$@"
