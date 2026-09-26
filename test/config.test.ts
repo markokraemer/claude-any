@@ -41,6 +41,13 @@ describe('normalizeModelList', () => {
     expect(m!.outputCost).toBeCloseTo(14);
   });
 
+  test('marks Kortix ChatGPT models as billed to the plan, without API prices', () => {
+    const [m] = normalizeModelList({ models: { 'codex/gpt-6-sol': { name: 'GPT-6 Sol (ChatGPT)', provider: 'codex', limit: { context: 1050000 }, cost: { input: 2, output: 10 } } } });
+    expect(m).toEqual({ id: 'codex/gpt-6-sol', name: 'GPT-6 Sol (ChatGPT)', contextTokens: 1050000, subscription: 'ChatGPT plan' });
+    expect(pickerOptions({ providers: { kortix: { baseUrl: 'x', apiKey: 'k', models: ['codex/gpt-6-sol'] } } }, { kortix: [m!] })[0]!.description)
+      .toBe('kortix · 1.1M context · billed to ChatGPT plan');
+  });
+
   test('reads the Kortix gateway models map', () => {
     expect(normalizeModelList({ models: { 'kimi-k3': { name: 'Kimi K3 2.8T', limit: { context: 1048576 }, cost: { input: 2.5, output: 14 } } } })).toEqual([
       { id: 'kimi-k3', name: 'Kimi K3 2.8T', contextTokens: 1048576, inputCost: 2.5, outputCost: 14 },
@@ -82,6 +89,24 @@ describe('claudeEnv', () => {
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('kortix/kimi-k3');
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('kortix/glm-5.3-flash');
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBe('0');
+  });
+});
+
+describe('auto mode server checks', () => {
+  test('stay on when every provider passes Anthropic traffic through', () => {
+    const anthropicOnly: Config = {
+      providers: { anthropic: { baseUrl: 'https://api.anthropic.test', apiKey: 'keychain', authHeader: 'x-api-key', forwardBetas: true, models: ['claude-sonnet-5'] } },
+      defaultModel: 'anthropic/claude-sonnet-5',
+    };
+    expect(claudeEnv(anthropicOnly, 'http://r', 't', undefined).CLAUDE_CODE_AUTO_MODE_SERVER).toBeUndefined();
+  });
+
+  test('respect a value the user already set', () => {
+    process.env.CLAUDE_CODE_AUTO_MODE_SERVER = '1';
+    const env = claudeEnv(config, 'http://r', 't', undefined);
+    delete process.env.CLAUDE_CODE_AUTO_MODE_SERVER;
+    expect(env.CLAUDE_CODE_AUTO_MODE_SERVER).toBe('1');
   });
 });
 

@@ -11,6 +11,9 @@ export interface ModelInfo {
   // USD per million tokens.
   inputCost?: number;
   outputCost?: number;
+  // Set when the upstream says the model runs on a subscription rather than
+  // per-token pricing (Kortix gateway: `provider: "codex"` = ChatGPT plan).
+  subscription?: string;
 }
 
 const num = (value: unknown): number | undefined => {
@@ -51,12 +54,12 @@ export function normalizeModelList(body: unknown): ModelInfo[] {
     return Object.entries(root.models as Record<string, Record<string, unknown>>).map(([id, m]) => {
       const limit = (m?.limit as Record<string, unknown> | undefined) ?? {};
       const cost = (m?.cost as Record<string, unknown> | undefined) ?? {};
+      const subscription = m?.provider === 'codex' ? 'ChatGPT plan' : undefined;
       return {
         id,
         name: typeof m?.name === 'string' ? m.name : undefined,
         contextTokens: num(limit.context),
-        inputCost: num(cost.input),
-        outputCost: num(cost.output),
+        ...(subscription ? { subscription } : { inputCost: num(cost.input), outputCost: num(cost.output) }),
       };
     });
   }
@@ -101,6 +104,7 @@ export function formatTokens(n: number | undefined): string {
 }
 
 export function formatCost(info: ModelInfo | undefined): string {
+  if (info?.subscription) return `billed to ${info.subscription}`;
   if (info?.inputCost === undefined || info.outputCost === undefined) return '';
   const f = (n: number) => `$${n < 1 ? +n.toFixed(3) : +n.toFixed(2)}`;
   return `${f(info.inputCost)}/${f(info.outputCost)} per MTok`;

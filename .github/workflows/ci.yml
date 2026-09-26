@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - name: CLI smoke
+        run: |
+          export CLAUDE_ANY_HOME="$RUNNER_TEMP/ca"
+          ./bin/claude-any --version
+          ./bin/claude-any add local --base-url http://127.0.0.1:9 --key-env NONE_SET
+          ./bin/claude-any enable local/some-model
+          ./bin/claude-any list

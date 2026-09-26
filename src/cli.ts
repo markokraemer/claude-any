@@ -7,6 +7,7 @@ import { type AuthHeader, type Config, allModelIds, configPath, loadConfig, pars
 import { launch, resolveKeys } from './launch';
 import { fetchModels, formatCost, formatTokens, readModelCache } from './models';
 import { PRESETS } from './presets';
+import pkg from '../package.json';
 import { startRouter } from './router';
 import { keychainAvailable, keychainDelete, keychainSet, resolveKey } from './secrets';
 
@@ -29,6 +30,7 @@ Usage:
   claude-any doctor                    Send one short request to every provider
   claude-any router [--port N]         Run only the router and print the env for a plain \`claude\`
   claude-any remove <name>             Remove a provider and its key
+  claude-any --version
 
 Config: ${configPath()}
 Pass \`--\` to hand an argument that looks like a subcommand to claude.`;
@@ -98,6 +100,11 @@ async function main(argv: string[]): Promise<number> {
     case '--help':
     case '-h':
       console.log(HELP);
+      return 0;
+
+    case '--version':
+    case 'version':
+      console.log(`claude-any ${pkg.version}`);
       return 0;
 
     case 'add': {

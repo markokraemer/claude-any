@@ -1,10 +1,39 @@
 {
   "name": "claude-any",
   "version": "0.1.0",
-  "description": "Run Claude Code on any Anthropic-compatible model endpoint, with every model selectable in /model.",
+  "description": "Run Claude Code on any Anthropic-compatible model endpoint, and switch between all of them from /model.",
+  "keywords": [
+    "claude-code",
+    "anthropic",
+    "llm-gateway",
+    "router",
+    "cli",
+    "kortix",
+    "model-picker"
+  ],
+  "homepage": "https://github.com/markokraemer/claude-any#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/markokraemer/claude-any.git"
+  },
+  "bugs": {
+    "url": "https://github.com/markokraemer/claude-any/issues"
+  },
+  "author": "Marko Kraemer",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "claude-any": "bin/claude-any"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
   },
   "scripts": {
     "test": "bun test",
@@ -14,6 +43,5 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.9.0"
-  },
-  "license": "MIT"
+  }
 }

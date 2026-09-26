@@ -71,6 +71,14 @@ export function claudeEnv(config: Config, routerUrl: string, token: string, wind
     env.ANTHROPIC_DEFAULT_FABLE_MODEL = main;
   }
   if (small) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = small;
+  // Auto mode's free server-side checks run on Anthropic's API and need the
+  // `safeguards` field and beta header to arrive untouched. A non-Anthropic
+  // upstream can never run them, so Claude Code would fall back mid-session
+  // behind a notice. Ask for its own classifier from the start instead; the
+  // classifier requests then go through the router like any other request.
+  if (!Object.values(config.providers).every((p) => p.forwardBetas) && env.CLAUDE_CODE_AUTO_MODE_SERVER === undefined) {
+    env.CLAUDE_CODE_AUTO_MODE_SERVER = '0';
+  }
   if (window) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window);
   return env;
 }
