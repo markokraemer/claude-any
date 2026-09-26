@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "description": "Run Claude Code on any Anthropic-compatible model endpoint, with every model selectable in /model.",
   "type": "module",
-  "bin": { "claude-any": "bin/claude-any" },
+  "bin": {
+    "claude-any": "bin/claude-any"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build src/cli.ts --compile --outfile dist/claude-any",
-    "e2e": "bash scripts/e2e.sh"
+    "build": "bun build src/cli.ts --compile --outfile dist/claude-any"
   },
   "devDependencies": {
     "@types/bun": "latest",
