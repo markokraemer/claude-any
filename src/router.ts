@@ -142,6 +142,10 @@ export function createRouter(opts: RouterOptions) {
     if (!key) return anthropicError(401, 'authentication_error', `claude-any: no key loaded for provider "${ref.provider}"`);
 
     body.model = ref.model;
+    // `metadata.user_id` is Anthropic's abuse-tracking tag. Other upstreams
+    // either ignore it or reject the request (the ChatGPT backend behind the
+    // Kortix gateway: "Unsupported parameter: metadata").
+    if (!provider.forwardBetas) delete body.metadata;
     const outgoing = JSON.stringify(body);
 
     const headers: Record<string, string> = {

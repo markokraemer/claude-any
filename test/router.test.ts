@@ -96,6 +96,16 @@ describe('router routing', () => {
     expect(calls[0]!.headers['anthropic-version']).toBe('2023-06-01');
   });
 
+  test('drops Anthropic metadata for a non-Anthropic provider and keeps it for Anthropic', async () => {
+    const { calls, fetchImpl } = fakeUpstream(okJson);
+    const router = createRouter({ config, keys, token: TOKEN, fetchImpl });
+    const metadata = { user_id: '{"session_id":"s1"}' };
+    await post(router, { model: 'kortix/kimi-k3', metadata, messages: [] });
+    await post(router, { model: 'anthropic/claude-sonnet-5', metadata, messages: [] });
+    expect(calls[0]!.body).not.toHaveProperty('metadata');
+    expect(calls[1]!.body.metadata).toEqual(metadata);
+  });
+
   test('uses x-api-key and forwards betas and the query for a provider configured that way', async () => {
     const { calls, fetchImpl } = fakeUpstream(okJson);
     const router = createRouter({ config, keys, token: TOKEN, fetchImpl });

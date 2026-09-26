@@ -1,6 +1,6 @@
 {
   "name": "claude-any",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Claude Code on any Anthropic-compatible model endpoint, and switch between all of them from /model.",
   "keywords": [
     "claude-code",

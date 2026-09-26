@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-09-26
+
+- Drop Anthropic `metadata` for non-Anthropic providers. The ChatGPT backend
+  behind the Kortix gateway rejected every Claude Code turn with
+  "Unsupported parameter: metadata"; `codex/*` models now work on
+  `gateway.kortix.com` without a gateway change.
+
 ## 0.1.0 — 2026-09-26
 
 First release.
